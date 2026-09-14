@@ -71,6 +71,22 @@ class TestGB9c:
     def test_plain_consonants_still_split(self):
         assert [c for _, _, c in segment_clusters("कक")] == ["क", "क"]
 
+    def test_unicode17_tulu_tigalari_conjoint(self):
+        # U+11390(InCB=Consonant) + U+113D0(InCB=Linker) + U+11390：
+        # Unicode 17 新增字符，运行时 unicodedata 视为未分配(Cn)，
+        # 字素分类须以内置的同版本 GCB/InCB 数据为准，序列仍成一个簇
+        s = "\U00011390\U000113D0\U00011390"
+        assert [c for _, _, c in segment_clusters(s)] == [s]
+
+    def test_api_reports_whole_unicode17_conjoint(self, client, font_ids):
+        s = "\U00011390\U000113D0\U00011390"
+        task = run_task(client, corpus=[{"text": s}], chain=[font_ids["alpha"]])
+        res = findings(client, task["id"], kind="missing_glyph")
+        assert res["total"] >= 1
+        assert {i["cluster"] for i in res["items"]} == {s}
+        segs = client.get(f"/tasks/{task['id']}/segments").json()
+        assert [(x["start"], x["end"]) for x in segs["items"]] == [(0, 3)]
+
     def test_api_reports_whole_conjoint(self, client, font_ids):
         # alpha 无天城文覆盖 -> 缺字报告的 cluster 应是完整的 क्ष 而非碎片
         task = run_task(client, corpus=[{"text": "क्ष"}], chain=[font_ids["alpha"]])
