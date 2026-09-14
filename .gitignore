@@ -1,0 +1,9 @@
+# 第三方依赖与本地数据
+.pybase/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# 运行时数据（SQLite 库与上传的字体）
+fontaudit.db*
+fonts_store/

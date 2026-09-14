@@ -1,0 +1,57 @@
+"""Unicode 码点 -> ISO 15924 文字系统（script）映射。
+
+覆盖常见文字；标点/符号/数字归 Zyyy（Common），组合符归 Zinh（Inherited），
+未识别归 Zzzz（Unknown）。范围表按块划分，块内少量例外不影响审计结论。
+"""
+from __future__ import annotations
+
+import unicodedata
+from bisect import bisect_right
+
+SCRIPT_RANGES: tuple[tuple[int, int, str], ...] = (
+    (0x0041, 0x005A, "Latn"), (0x0061, 0x007A, "Latn"),
+    (0x00C0, 0x00D6, "Latn"), (0x00D8, 0x00F6, "Latn"), (0x00F8, 0x024F, "Latn"),
+    (0x0370, 0x03FF, "Grek"),
+    (0x0400, 0x052F, "Cyrl"), (0x2DE0, 0x2DFF, "Cyrl"), (0xA640, 0xA69F, "Cyrl"),
+    (0x0530, 0x058F, "Armn"),
+    (0x0590, 0x05FF, "Hebr"),
+    (0x0600, 0x06FF, "Arab"), (0x0750, 0x077F, "Arab"), (0x08A0, 0x08FF, "Arab"),
+    (0xFB50, 0xFDFF, "Arab"), (0xFE70, 0xFEFF, "Arab"),
+    (0x0700, 0x074F, "Syrc"), (0x0780, 0x07BF, "Thaa"),
+    (0x0900, 0x097F, "Deva"), (0x0980, 0x09FF, "Beng"), (0x0A00, 0x0A7F, "Guru"),
+    (0x0A80, 0x0AFF, "Gujr"), (0x0B00, 0x0B7F, "Orya"), (0x0B80, 0x0BFF, "Taml"),
+    (0x0C00, 0x0C7F, "Telu"), (0x0C80, 0x0CFF, "Knda"), (0x0D00, 0x0D7F, "Mlym"),
+    (0x0D80, 0x0DFF, "Sinh"), (0x0E00, 0x0E7F, "Thai"), (0x0E80, 0x0EFF, "Laoo"),
+    (0x0F00, 0x0FFF, "Tibt"), (0x1000, 0x109F, "Mymr"),
+    (0x10A0, 0x10FF, "Geor"),
+    (0x1100, 0x11FF, "Hang"), (0x3130, 0x318F, "Hang"), (0xAC00, 0xD7AF, "Hang"),
+    (0x1200, 0x137F, "Ethi"), (0x13A0, 0x13FF, "Cher"), (0x1400, 0x167F, "Cans"),
+    (0x1780, 0x17FF, "Khmr"), (0x1800, 0x18AF, "Mong"),
+    (0x1E00, 0x1EFF, "Latn"), (0x2C60, 0x2C7F, "Latn"),
+    (0x1F00, 0x1FFF, "Grek"),
+    (0x3005, 0x3005, "Hani"), (0x3007, 0x3007, "Hani"),
+    (0x3040, 0x309F, "Hira"),
+    (0x30A0, 0x30FF, "Kana"), (0x31F0, 0x31FF, "Kana"), (0xFF66, 0xFF9D, "Kana"),
+    (0x3105, 0x312F, "Bopo"),
+    (0x3400, 0x4DBF, "Hani"), (0x4E00, 0x9FFF, "Hani"), (0xF900, 0xFAFF, "Hani"),
+    (0x20000, 0x2A6DF, "Hani"), (0x2A700, 0x2EBEF, "Hani"),
+    (0xA000, 0xA48F, "Yiii"),
+    (0xA720, 0xA7FF, "Latn"), (0xAB30, 0xAB6F, "Latn"),
+    (0xFF21, 0xFF3A, "Latn"), (0xFF41, 0xFF5A, "Latn"),
+)
+
+_STARTS = [a for a, _, _ in SCRIPT_RANGES]
+
+
+def script_of(cp: int) -> str:
+    i = bisect_right(_STARTS, cp) - 1
+    if i >= 0:
+        a, b, s = SCRIPT_RANGES[i]
+        if a <= cp <= b:
+            return s
+    cat = unicodedata.category(chr(cp))
+    if cat in ("Mn", "Mc", "Me"):
+        return "Zinh"
+    if cat == "Zzzz" or cat == "Cn":
+        return "Zzzz"
+    return "Zyyy"
