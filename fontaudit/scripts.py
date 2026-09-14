@@ -2,6 +2,7 @@
 
 覆盖常见文字；标点/符号/数字归 Zyyy（Common），组合符归 Zinh（Inherited），
 未识别归 Zzzz（Unknown）。范围表按块划分，块内少量例外不影响审计结论。
+bisect 查询要求区间按起点有序且无交叠，加载时排序并断言，防止后续维护破坏序性。
 """
 from __future__ import annotations
 
@@ -40,18 +41,22 @@ SCRIPT_RANGES: tuple[tuple[int, int, str], ...] = (
     (0xFF21, 0xFF3A, "Latn"), (0xFF41, 0xFF5A, "Latn"),
 )
 
-_STARTS = [a for a, _, _ in SCRIPT_RANGES]
+# bisect 要求按区间起点有序；排序后断言有序且无交叠
+_RANGES: tuple[tuple[int, int, str], ...] = tuple(sorted(SCRIPT_RANGES, key=lambda r: r[0]))
+assert all(_RANGES[i][1] < _RANGES[i + 1][0] for i in range(len(_RANGES) - 1)), \
+    "SCRIPT_RANGES 区间存在交叠"
+_STARTS = [a for a, _, _ in _RANGES]
 
 
 def script_of(cp: int) -> str:
     i = bisect_right(_STARTS, cp) - 1
     if i >= 0:
-        a, b, s = SCRIPT_RANGES[i]
+        a, b, s = _RANGES[i]
         if a <= cp <= b:
             return s
     cat = unicodedata.category(chr(cp))
     if cat in ("Mn", "Mc", "Me"):
         return "Zinh"
-    if cat == "Zzzz" or cat == "Cn":
+    if cat == "Cn":
         return "Zzzz"
     return "Zyyy"

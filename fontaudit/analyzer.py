@@ -155,12 +155,14 @@ def analyze_cluster(cluster: str, faces: list[FontFace], font_ids: list[int],
             base = next((cps[k] for k in range(pos - 1, -1, -1) if not is_vs(cps[k])), None)
             if base is None:
                 continue
-            if face.uvs_mapping(base, cp) != "specific":
+            # default UVS 是字体对变体选择符的显式处理（映射回默认字形），
+            # 按 cmap14 语义不算丢失；只有完全无 cmap14 条目才是静默丢弃
+            if face.uvs_mapping(base, cp) is None:
                 supporters = [font_ids[j] for j, f in enumerate(faces)
                               if f.uvs_mapping(base, cp) == "specific"]
                 issues.append(_issue(VARIATION_LOST, cp, font_id=fid,
                                      related_font_id=supporters[0] if supporters else None,
-                                     reason="variation selector has no specific glyph in chosen font",
+                                     reason="variation selector has no cmap14 mapping in chosen font",
                                      base=fmt_cp(base), supported_by=supporters))
 
     # 4) 指定脚本的必用字体
@@ -183,23 +185,51 @@ def analyze_cluster(cluster: str, faces: list[FontFace], font_ids: list[int],
     return chosen, uniq, script
 
 
+def _normalize_with_mapping(text: str, form: str) -> tuple[str, list[tuple[int, int]]]:
+    """规范化文本并建立索引映射：返回 (规范化文本, mapping)，
+    mapping[i] = (orig_start, orig_end) 表示规范化后第 i 个字符来自原文的哪个区间。
+
+    按原文字素簇逐个规范化再拼接——规范化（含 NFC 合成、NFKC 展开）不会跨
+    字素簇边界重排或合并，故与整体规范化结果一致，同时保留逐簇对应关系。
+    """
+    parts: list[str] = []
+    mapping: list[tuple[int, int]] = []
+    for s, e, cl in segment_clusters(text):
+        ncl = unicodedata.normalize(form, cl)
+        parts.append(ncl)
+        mapping.extend([(s, e)] * len(ncl))
+    return "".join(parts), mapping
+
+
 def analyze_text(item: dict, faces: list[FontFace], font_ids: list[int],
                  cfg: AuditConfig) -> dict:
-    """分析一条语料，返回簇级结果与合并后的字体分段。"""
+    """分析一条语料，返回簇级结果与合并后的字体分段。
+
+    分析在规范化文本上进行，但所有对外坐标（start/end/cluster/segments）
+    均映射回原文，保证调用方能按原始语料定位。
+    """
     original = item["text"]
     lang = item.get("lang")
     text = original
+    mapping: list[tuple[int, int]] | None = None
     if cfg.normalization != "none":
-        text = unicodedata.normalize(cfg.normalization, original)
+        text, mapping = _normalize_with_mapping(original, cfg.normalization)
     clusters = []
     for start, end, cl in segment_clusters(text):
         chosen, issues, script = analyze_cluster(cl, faces, font_ids, cfg, lang)
+        if mapping is not None:
+            os_, oe = mapping[start][0], mapping[end - 1][1]
+        else:
+            os_, oe = start, end
         clusters.append({
-            "start": start, "end": end, "text": cl, "script": script,
+            "start": os_, "end": oe,          # 原文坐标
+            "text": original[os_:oe],         # 原文片段
+            "norm_text": cl,                  # 实际分析的规范化簇
+            "script": script,
             "font_id": font_ids[chosen] if chosen is not None else None,
             "issues": issues,
         })
-    # 连续同字体的簇合并为分段
+    # 连续同字体的簇合并为分段（坐标与文本均为原文）
     segments: list[dict] = []
     for c in clusters:
         if segments and segments[-1]["font_id"] == c["font_id"] and segments[-1]["end"] == c["start"]:
@@ -216,10 +246,10 @@ def _codepoints_json(text: str) -> str:
     return json.dumps([fmt_cp(ord(c)) for c in text], ensure_ascii=False)
 
 
-def _compute_diffs(task_id: int, text_index: int, res_a: dict, res_b: dict) -> list[tuple]:
-    """按簇对齐两条链的结果，输出差异行（含码点、脚本、位置、最小复现片段）。"""
+def _compute_diffs(task_id: int, text_index: int, original: str,
+                   res_a: dict, res_b: dict) -> list[tuple]:
+    """按簇对齐两条链的结果，输出差异行（含码点、脚本、原文位置、最小复现片段）。"""
     rows = []
-    normalized = res_a["normalized"]
     for a, b in zip(res_a["clusters"], res_b["clusters"]):
         kinds_a = sorted(i["kind"] for i in a["issues"])
         kinds_b = sorted(i["kind"] for i in b["issues"])
@@ -231,7 +261,7 @@ def _compute_diffs(task_id: int, text_index: int, res_a: dict, res_b: dict) -> l
             kind = "font_changed"
         else:
             kind = "issues_changed"
-        context = normalized[max(0, a["start"] - 8):a["end"] + 8]
+        context = original[max(0, a["start"] - 8):a["end"] + 8]
         rows.append((
             task_id, text_index, a["start"], a["end"], a["text"],
             _codepoints_json(a["text"]), a["script"], kind,
@@ -304,7 +334,8 @@ def run_task(db: Database, task_id: int) -> None:
                     segment_rows.append((task_id, chain_key, ti, seg["start"], seg["end"],
                                          seg["text"], seg["font_id"]))
             if "B" in chains:
-                diff_rows.extend(_compute_diffs(task_id, ti, per_chain["A"], per_chain["B"]))
+                diff_rows.extend(_compute_diffs(task_id, ti, item["text"],
+                                                per_chain["A"], per_chain["B"]))
 
         db.executemany(_INSERT_FINDING, finding_rows)
         db.executemany(_INSERT_SEGMENT, segment_rows)

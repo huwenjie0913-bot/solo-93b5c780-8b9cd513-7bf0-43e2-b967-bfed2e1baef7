@@ -165,7 +165,11 @@ def test_normalization_nfc_changes_coverage(client, font_ids):
                   chain=[font_ids["beta"], font_ids["alpha"]], normalization="NFC")
     res = findings(client, t1["id"], kind="missing_glyph")
     assert res["total"] == 1
-    assert json.loads(res["items"][0]["codepoints"]) == ["U+00E1"]
+    item = res["items"][0]
+    # 坐标与码点指向原文（a+U+0301，长度 2），detail.cp 给出规范化后的缺失码点
+    assert (item["start"], item["end"]) == (0, 2)
+    assert json.loads(item["codepoints"]) == ["U+0061", "U+0301"]
+    assert json.loads(item["detail"])["cp"] == "U+00E1"
     assert findings(client, t1["id"], kind="cluster_split")["total"] == 0
 
     t2 = run_task(client, corpus=[{"text": text}],
