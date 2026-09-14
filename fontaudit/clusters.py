@@ -10,6 +10,7 @@ import unicodedata
 from bisect import bisect_right
 
 from .emoji_data import is_extended_pictographic
+from .incb_data import is_incb_consonant, is_incb_extend, is_incb_linker
 
 # Grapheme_Cluster_Break=Prepend（如阿拉伯文数字前缀符）
 PREPEND_RANGES: tuple[tuple[int, int], ...] = (
@@ -19,30 +20,6 @@ PREPEND_RANGES: tuple[tuple[int, int], ...] = (
     (0x11A84, 0x11A89), (0x11D46, 0x11D46),
 )
 _PREPEND_STARTS = [a for a, _ in PREPEND_RANGES]
-
-# GB9c 所需：Indic_Conjunct_Break=Linker（各印度系文字的 virama）
-INCB_LINKERS = frozenset({
-    0x094D, 0x09CD, 0x0A4D, 0x0ACD, 0x0B4D, 0x0BCD, 0x0C4D, 0x0CCD, 0x0D4D, 0x0DCA,
-    0x1B44, 0xA9C0, 0x11046, 0x110B9, 0x11133, 0x111C0, 0x11235, 0x112EA, 0x1134D,
-    0x11442, 0x114C2, 0x115BF, 0x1163F, 0x116B6, 0x1172B, 0x11839, 0x119E0, 0x11A34,
-    0x11A99, 0x11C3F, 0x11D44, 0x11D97, 0x11F41,
-})
-
-# Indic_Conjunct_Break=Consonant 的实用近似：主要印度系文字块的辅音字母区间
-# （区间内未分配码点不会出现在真实文本中）
-INCB_CONSONANT_RANGES: tuple[tuple[int, int], ...] = (
-    (0x0915, 0x0939), (0x0958, 0x095F),  # Deva
-    (0x0995, 0x09B9),                    # Beng
-    (0x0A15, 0x0A39),                    # Guru
-    (0x0A95, 0x0AB9),                    # Gujr
-    (0x0B15, 0x0B39),                    # Orya
-    (0x0B95, 0x0BB9),                    # Taml
-    (0x0C15, 0x0C39),                    # Telu
-    (0x0C95, 0x0CB9),                    # Knda
-    (0x0D15, 0x0D39),                    # Mlym
-    (0x0D9A, 0x0DC6),                    # Sinh
-)
-_CONS_STARTS = [a for a, _ in INCB_CONSONANT_RANGES]
 
 
 def _in_ranges(cp: int, ranges: tuple[tuple[int, int], ...], starts: list[int]) -> bool:
@@ -99,22 +76,22 @@ def _gb11(props: list[str], extp: list[bool], i: int) -> bool:
     return j >= 0 and extp[j]
 
 
-def _gb9c(props: list[str], cps: list[int], i: int) -> bool:
+def _gb9c(cps: list[int], i: int) -> bool:
     """GB9c: Consonant [Linker Extend]* Linker [Linker Extend]* × Consonant。
 
     印地语等文字的辅音连字（如 क्ष = क + ् + ष）不得断开。
-    virama（Linker）本身 GCB=Extend，ZWJ/ZWNJ 的 InCB=Extend，
-    故向前扫描 props 为 Extend/ZWJ 的字符即可。
+    Consonant/Linker/Extend 均为 InCB 属性（见 incb_data.py，官方 UCD 数据）；
+    InCB=Extend 依官方定义包含 ZWJ，故 क्‍ष（含 ZWJ）同样不断开。
     """
-    if not _in_ranges(cps[i], INCB_CONSONANT_RANGES, _CONS_STARTS):
+    if not is_incb_consonant(cps[i]):
         return False
     j = i - 1
     saw_linker = False
-    while j >= 0 and props[j] in ("Extend", "ZWJ"):
-        if cps[j] in INCB_LINKERS:
+    while j >= 0 and (is_incb_linker(cps[j]) or is_incb_extend(cps[j])):
+        if is_incb_linker(cps[j]):
             saw_linker = True
         j -= 1
-    return saw_linker and j >= 0 and _in_ranges(cps[j], INCB_CONSONANT_RANGES, _CONS_STARTS)
+    return saw_linker and j >= 0 and is_incb_consonant(cps[j])
 
 
 def segment_clusters(text: str) -> list[tuple[int, int, str]]:
@@ -149,7 +126,7 @@ def segment_clusters(text: str) -> list[tuple[int, int, str]]:
             br = False  # GB9a
         elif p == "Prepend":
             br = False  # GB9b
-        elif _gb9c(props, cps, i):
+        elif _gb9c(cps, i):
             br = False  # GB9c：印地语辅音连字
         elif extp[i] and _gb11(props, extp, i):
             br = False  # GB11

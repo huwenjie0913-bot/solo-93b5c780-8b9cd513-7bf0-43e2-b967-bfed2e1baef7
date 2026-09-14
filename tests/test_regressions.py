@@ -60,6 +60,14 @@ class TestGB9c:
     def test_conjoint_with_zwj(self):
         assert [c for _, _, c in segment_clusters("क्‍ष")] == ["क्‍ष"]
 
+    def test_balinese_conjoint_single_cluster(self):
+        # U+1B13 KA + U+1B44 ADEG ADEG(virama) + U+1B13 KA
+        assert [c for _, _, c in segment_clusters("ᬓ᭄ᬓ")] == ["ᬓ᭄ᬓ"]
+
+    def test_javanese_conjoint_single_cluster(self):
+        # U+A98F KA + U+A9C0 PANGKON(virama) + U+A98F KA
+        assert [c for _, _, c in segment_clusters("ꦏ꧀ꦏ")] == ["ꦏ꧀ꦏ"]
+
     def test_plain_consonants_still_split(self):
         assert [c for _, _, c in segment_clusters("कक")] == ["क", "क"]
 
@@ -69,6 +77,22 @@ class TestGB9c:
         res = findings(client, task["id"], kind="missing_glyph")
         assert res["total"] >= 1
         assert {i["cluster"] for i in res["items"]} == {"क्ष"}
+        segs = client.get(f"/tasks/{task['id']}/segments").json()
+        assert [(s["start"], s["end"]) for s in segs["items"]] == [(0, 3)]
+
+    def test_api_reports_whole_balinese_conjoint(self, client, font_ids):
+        task = run_task(client, corpus=[{"text": "ᬓ᭄ᬓ"}], chain=[font_ids["alpha"]])
+        res = findings(client, task["id"], kind="missing_glyph")
+        assert res["total"] >= 1
+        assert {i["cluster"] for i in res["items"]} == {"ᬓ᭄ᬓ"}
+        segs = client.get(f"/tasks/{task['id']}/segments").json()
+        assert [(s["start"], s["end"]) for s in segs["items"]] == [(0, 3)]
+
+    def test_api_reports_whole_javanese_conjoint(self, client, font_ids):
+        task = run_task(client, corpus=[{"text": "ꦏ꧀ꦏ"}], chain=[font_ids["alpha"]])
+        res = findings(client, task["id"], kind="missing_glyph")
+        assert res["total"] >= 1
+        assert {i["cluster"] for i in res["items"]} == {"ꦏ꧀ꦏ"}
         segs = client.get(f"/tasks/{task['id']}/segments").json()
         assert [(s["start"], s["end"]) for s in segs["items"]] == [(0, 3)]
 
