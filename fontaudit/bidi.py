@@ -46,8 +46,7 @@ _BRACKET_PAIR_CPS = (
     (0x29D8, 0x29D9), (0x29DA, 0x29DB), (0x29FC, 0x29FD),
     (0x2E02, 0x2E03), (0x2E04, 0x2E05), (0x2E09, 0x2E0A),
     (0x2E0C, 0x2E0D), (0x2E1C, 0x2E1D), (0x2E20, 0x2E21),
-    (0x2E22, 0x2E23), (0x2E24, 2E25 if False else 0x2E25),
-    (0x2E26, 0x2E27), (0x2E28, 0x2E29),
+    (0x2E22, 0x2E23), (0x2E24, 0x2E25), (0x2E26, 0x2E27), (0x2E28, 0x2E29),
     (0x3008, 0x3009), (0x300A, 0x300B), (0x300C, 0x300D),
     (0x300E, 0x300F), (0x3010, 0x3011), (0x3014, 0x3015),
     (0x3016, 0x3017), (0x3018, 0x3019), (0x301A, 0x301B),
@@ -333,13 +332,13 @@ def _strong_of(t: str) -> str | None:
     return None
 
 
-def _resolve_brackets(chars: list[int], rtypes: list[str],
-                      levels: list[int], sos: str) -> None:
+def _resolve_brackets(chars: list[int], rtypes: list[str], levels: list[int],
+                      cps: list[int], sos: str) -> None:
     """N0：处理序列内配对括号（BD16 栈式配对）。"""
     pairs: list[tuple[int, int]] = []
     stack: list[tuple[int, int]] = []
     for pos, i in enumerate(chars):
-        cp = ord_char[i]
+        cp = cps[i]
         if cp in OPEN_TO_CLOSE:
             stack.append((cp, pos))
         elif cp in CLOSE_TO_OPEN and stack and stack[-1][0] == CLOSE_TO_OPEN[cp]:
@@ -366,24 +365,20 @@ def _resolve_neutral(chars: list[int], rtypes: list[str], levels: list[int],
     """N1/N2：两侧同向取该方向，否则取嵌入方向。"""
     seq_start: int | None = None
     prev_type = sos
-    chain = chars + [None]                               # None 处视为 eor
-    for k, i in enumerate(chain):
+    # 末尾补一个 eor 哨兵，迫使行尾中性序列被结算
+    for k, i in enumerate([*chars, None]):
         t = eor if i is None else rtypes[i]
         if t in ("WS", "ON", "S", "B"):
             if seq_start is None:
                 seq_start = k
-                prev_type = chain[k - 1] if False else (eor if k == 0 else
-                            (rtypes[chars[k - 1]] if chars[k - 1] is not None else sos))
-                if k == 0:
-                    prev_type = sos
-        else:
-            if seq_start is not None:
-                p = _strong_of(prev_type) or prev_type
-                q = _strong_of(t) or t
-                for m in range(seq_start, k):
-                    mi = chars[m]
-                    rtypes[mi] = p if p == q else ("R" if levels[mi] & 1 else "L")
-                seq_start = None
+                prev_type = sos if k == 0 else rtypes[chars[k - 1]]
+        elif seq_start is not None:
+            p = _strong_of(prev_type) or prev_type
+            q = _strong_of(t) or t
+            for m in range(seq_start, k):
+                mi = chars[m]
+                rtypes[mi] = p if p == q else ("R" if levels[mi] & 1 else "L")
+            seq_start = None
 
 
 def _resolve_implicit(indices: list[int], rtypes: list[str], levels: list[int]) -> None:
@@ -399,6 +394,14 @@ def _resolve_implicit(indices: list[int], rtypes: list[str], levels: list[int]) 
                 levels[i] += 2
         elif t in ("L", "EN", "AN"):
             levels[i] += 1
+
+
+def _assign_removed_levels(rtypes: list[str], levels: list[int], base_level: int) -> None:
+    """X9 移除类（显式控制符/BN）的最终层级：取前一字符的最终层级
+    （链式向前，等效于最近一个未移除字符的层级），段首取段落层级。"""
+    for i in range(len(levels)):
+        if rtypes[i] == "BN":
+            levels[i] = levels[i - 1] if i > 0 else base_level
 
 
 def _reset_line_ends(types: list[str], levels: list[int], base_level: int) -> None:
@@ -435,15 +438,10 @@ def _visual_order(levels: list[int]) -> list[int]:
     return order
 
 
-# _resolve_brackets 需要逐字符码点；按段落解析时绑定为模块级临时表
-ord_char: list[int] = []
-
-
 def resolve_paragraph(text: str, base_level: int, offset: int = 0) -> ParagraphResult:
     """解析单个段落，返回层级、视觉顺序与控制符事件。"""
-    global ord_char
     types = [bidi_class(c) for c in text]
-    ord_char = [ord(c) for c in text]
+    cps = [ord(c) for c in text]
     levels, rtypes, events, iso_match = _explicit(types, base_level)
 
     indices = [i for i in range(len(text)) if rtypes[i] != "BN"]
@@ -456,9 +454,10 @@ def resolve_paragraph(text: str, base_level: int, offset: int = 0) -> ParagraphR
         sos = "R" if max(runs[first][0], prev_level) & 1 else "L"
         eor = "R" if max(runs[last][0], next_level) & 1 else "L"
         _resolve_weak(chars, rtypes, sos)
-        _resolve_brackets(chars, rtypes, levels, sos)
+        _resolve_brackets(chars, rtypes, levels, cps, sos)
         _resolve_neutral(chars, rtypes, levels, sos, eor)
     _resolve_implicit(indices, rtypes, levels)
+    _assign_removed_levels(rtypes, levels, base_level)
     _reset_line_ends(types, levels, base_level)
     order = _visual_order(levels)
     return ParagraphResult(offset, offset + len(text), base_level, levels, order, events)
